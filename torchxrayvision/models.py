@@ -188,7 +188,79 @@ class DenseNet(nn.Module):
         out = F.relu(features, inplace=True)
         out = F.adaptive_avg_pool2d(out, (1, 1))
         out = torch.flatten(out, 1)
-        print(out.size())
+        out = self.classifier(out)
+        
+        if hasattr(self,"op_threshs") and (self.op_threshs != None):
+            out = torch.sigmoid(out)
+            out = op_norm(out, self.op_threshs)
+        return out
+
+class DenseNetFeatures(DenseNet):
+    def forward(self, x):
+        return self.features(x)
+
+class DenseNetClassifier(nn.Module):
+    def __init__(self, growth_rate=32, block_config=(6, 12, 24, 16), num_init_features=64, bn_size=4,
+                 drop_rate=0, num_classes=18, in_channels=1, weights=None, op_threshs=None, progress=True):
+
+        super(DenseNetClassifier, self).__init__()            
+
+        # Linear layer
+        self.classifier = nn.Linear(1024, num_classes)
+
+        # Official init from torch repo.
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d):
+                nn.init.kaiming_normal_(m.weight)
+            elif isinstance(m, nn.BatchNorm2d):
+                nn.init.constant_(m.weight, 1)
+                nn.init.constant_(m.bias, 0)
+            elif isinstance(m, nn.Linear):
+                nn.init.constant_(m.bias, 0)
+                
+        # needs to be register_buffer here so it will go to cuda/cpu easily
+        self.register_buffer('op_threshs', op_threshs)
+
+                
+        if weights != None:
+            
+            if not weights in model_urls.keys():
+                raise Exception("weights value must be in {}".format(list(model_urls.keys())))
+            
+            url = model_urls[weights]["weights_url"]
+            weights_filename = os.path.basename(url)
+            weights_storage_folder = os.path.expanduser(os.path.join("~",".torchxrayvision","models_data"))
+            weights_filename_local = os.path.expanduser(os.path.join(weights_storage_folder,weights_filename))
+              
+            if not os.path.isfile(weights_filename_local):
+                print("Downloading weights...")
+                print("If this fails you can run `wget {} -O {}`".format(url, weights_filename_local))
+                pathlib.Path(weights_storage_folder).mkdir(parents=True, exist_ok=True)
+                download(url, weights_filename_local)
+
+            savedmodel = torch.load(weights_filename_local, map_location='cpu')
+            # patch to load old models https://github.com/pytorch/pytorch/issues/42242
+            for mod in savedmodel.modules():
+                if not hasattr(mod, "_non_persistent_buffers_set"):
+                    mod._non_persistent_buffers_set = set()
+            
+            self.load_state_dict({
+                k: v
+                for k, v in savedmodel.state_dict().items()
+                if "classifier" in k})
+            
+            self.eval()
+            
+            # set to be what this model is trained to predict
+            self.pathologies = model_urls[weights]["labels"]
+            
+            if "op_threshs" in model_urls[weights]:
+                self.op_threshs = torch.tensor(model_urls[weights]["op_threshs"])
+
+    def forward(self, features):
+        out = F.relu(features, inplace=True)
+        out = F.adaptive_avg_pool2d(out, (1, 1))
+        out = torch.flatten(out, 1)
         out = self.classifier(out)
         
         if hasattr(self,"op_threshs") and (self.op_threshs != None):
