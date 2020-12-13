@@ -298,7 +298,7 @@ class NIH_Dataset(Dataset):
         
         imgid = self.csv['Image Index'].iloc[idx]
         img_path = os.path.join(self.imgpath, imgid)
-        #print(img_path)
+        print(img_path)
         img = imread(img_path)
         if self.normalize:
             img = normalize(img, self.MAXVAL)  
